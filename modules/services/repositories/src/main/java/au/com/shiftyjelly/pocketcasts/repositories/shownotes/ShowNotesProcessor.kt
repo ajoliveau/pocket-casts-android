@@ -25,11 +25,15 @@ class ShowNotesProcessor @AssistedInject constructor(
     private val chapterManager: ChapterManager,
     private val transcriptDao: TranscriptDao,
     private val service: PodcastCacheService,
-    @Assisted private val showNotesBaseUrl: HttpUrl,
+    @Assisted("showNotesBaseUrl") private val showNotesBaseUrl: HttpUrl,
+    @Assisted("customTranscriptBaseUrl") private val customTranscriptBaseUrl: HttpUrl?,
 ) {
     @AssistedFactory
     interface Factory {
-        fun create(showNotesBaseUrl: HttpUrl): ShowNotesProcessor
+        fun create(
+            @Assisted("showNotesBaseUrl") showNotesBaseUrl: HttpUrl,
+            @Assisted("customTranscriptBaseUrl") customTranscriptBaseUrl: HttpUrl?,
+        ): ShowNotesProcessor
     }
 
     suspend fun process(
@@ -108,6 +112,7 @@ class ShowNotesProcessor @AssistedInject constructor(
             episodeUuid = episodeUuid,
             hasGeneratedTranscript = episode?.hasGeneratedTranscript == true,
             showNotesBaseUrl = showNotesBaseUrl,
+            customTranscriptBaseUrl = customTranscriptBaseUrl,
         )
         if (transcripts != null) {
             transcriptDao.replaceAll(transcripts)
@@ -135,9 +140,15 @@ internal fun ShowNotesResponse.findTranscripts(
     episodeUuid: String,
     hasGeneratedTranscript: Boolean,
     showNotesBaseUrl: HttpUrl,
+    customTranscriptBaseUrl: HttpUrl? = null,
 ): List<Transcript>? {
     val episode = podcast?.episodes?.firstOrNull { it.uuid == episodeUuid } ?: return null
     return buildList {
+        CustomTranscriptCatalog.find(
+            podcastUuid = podcastUuid,
+            episodeUuid = episodeUuid,
+            baseUrl = customTranscriptBaseUrl,
+        )?.let(::add)
         addAll(episode.transcripts?.mapNotNull { it.toTranscript(episodeUuid, isGenerated = false) }.orEmpty())
         if (hasGeneratedTranscript) {
             add(

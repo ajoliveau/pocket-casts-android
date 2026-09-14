@@ -83,6 +83,8 @@ class PlayerContainerFragment :
     var upNextBottomSheetBehavior: BottomSheetBehavior<View>? = null
 
     private var upNextExpandedSource: UpNextSource? = null
+    private var transcriptTabEpisodeUuid: String? = null
+    private var isReconcilingSections = false
 
     private lateinit var adapter: ViewPagerAdapter
     private val viewModel: PlayerViewModel by activityViewModels()
@@ -195,6 +197,10 @@ class PlayerContainerFragment :
 
             override fun onPageSelected(position: Int) {
                 super.onPageSelected(position)
+                if (isReconcilingSections) {
+                    previousPosition = position
+                    return
+                }
                 val tab = when {
                     adapter.isPlayerTab(position) -> {
                         if (previousPosition == INVALID_TAB_POSITION) {
@@ -205,6 +211,10 @@ class PlayerContainerFragment :
 
                     adapter.isNotesTab(position) -> {
                         PlayerTabType.ShowNotes
+                    }
+
+                    adapter.isTranscriptTab(position) -> {
+                        null
                     }
 
                     adapter.isBookmarksTab(position) -> {
@@ -249,6 +259,7 @@ class PlayerContainerFragment :
         })
 
         adapter = ViewPagerAdapter(childFragmentManager, viewLifecycleOwner.lifecycle)
+        transcriptTabEpisodeUuid = null
         viewPager.adapter = adapter
         viewPager.getChildAt(0).isNestedScrollingEnabled = false // HACK to fix bottom sheet drag, https://issuetracker.google.com/issues/135517665
         TabLayoutMediator(binding.tabLayout, viewPager, true) { tab, position ->
@@ -256,7 +267,13 @@ class PlayerContainerFragment :
         }.attach()
 
         viewModel.listDataLive.observe(viewLifecycleOwner) {
-            adapter.updateNotes(addNotes = !it.podcastHeader.isUserEpisode)
+            updateSections {
+                adapter.updateNotes(addNotes = !it.podcastHeader.isUserEpisode)
+            }
+            if (transcriptTabEpisodeUuid != it.podcastHeader.episodeUuid) {
+                transcriptTabEpisodeUuid = it.podcastHeader.episodeUuid
+                reconcileTranscriptTab(shelfSharedViewModel.uiState.value)
+            }
             val isSummaryOrChaptersEnabled =
                 FeatureFlag.isEnabled(Feature.AI_SUMMARIES) || FeatureFlag.isEnabled(Feature.GENERATED_CHAPTERS)
             if (isSummaryOrChaptersEnabled && !it.podcastHeader.isUserEpisode) {
@@ -290,8 +307,18 @@ class PlayerContainerFragment :
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                shelfSharedViewModel.uiState.collect { state ->
+                    reconcileTranscriptTab(state)
+                }
+            }
+        }
+
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 chaptersViewModel.uiState.collect {
-                    adapter.updateChapters(addChapters = it.chaptersCount > 0)
+                    updateSections {
+                        adapter.updateChapters(addChapters = it.chaptersCount > 0)
+                    }
                 }
             }
         }
@@ -299,10 +326,12 @@ class PlayerContainerFragment :
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 summaryViewModel.state.collect { state ->
-                    adapter.updateSummary(
-                        addSummary = state is SummaryViewModel.SummaryState.Loaded ||
-                            state is SummaryViewModel.SummaryState.Upsell,
-                    )
+                    updateSections {
+                        adapter.updateSummary(
+                            addSummary = state is SummaryViewModel.SummaryState.Loaded ||
+                                state is SummaryViewModel.SummaryState.Upsell,
+                        )
+                    }
                 }
             }
         }
@@ -355,6 +384,38 @@ class PlayerContainerFragment :
             }
         } catch (e: IllegalStateException) {
             Timber.e(e)
+        }
+    }
+
+    private fun reconcileTranscriptTab(shelfState: ShelfSharedViewModel.UiState) {
+        val playerEpisode = viewModel.listDataLive.value?.podcastHeader?.episode
+        val transcriptTab = transcriptTabForPlayerEpisode(
+            playerEpisodeUuid = playerEpisode?.uuid,
+            playerPodcastUuid = (playerEpisode as? PodcastEpisode)?.podcastUuid,
+            shelfEpisodeUuid = shelfState.episode?.uuid,
+            shelfTranscriptAvailable = shelfState.isTranscriptAvailable,
+        )
+        updateSections {
+            adapter.updateTranscript(
+                addTranscript = transcriptTab?.isAvailable == true,
+                episodeUuid = transcriptTab?.episodeUuid ?: playerEpisode?.uuid,
+                podcastUuid = transcriptTab?.podcastUuid ?: (playerEpisode as? PodcastEpisode)?.podcastUuid,
+            )
+        }
+    }
+
+    private fun updateSections(update: () -> Unit) {
+        val viewPager = binding?.viewPager ?: return
+        val selectedSection = adapter.sectionType(viewPager.currentItem)
+        isReconcilingSections = true
+        try {
+            update()
+            val newPosition = remapSectionPosition(selectedSection, adapter.sectionTypes(), viewPager.currentItem)
+            if (newPosition != viewPager.currentItem) {
+                viewPager.setCurrentItem(newPosition, false)
+            }
+        } finally {
+            isReconcilingSections = false
         }
     }
 
@@ -441,25 +502,71 @@ class PlayerContainerFragment :
     }
 }
 
-private class ViewPagerAdapter(fragmentManager: FragmentManager, lifecycle: Lifecycle) : FragmentStateAdapter(fragmentManager, lifecycle) {
-    private sealed class Section(@StringRes val titleRes: Int) {
-        data object Player : Section(LR.string.player_tab_playing)
-        data object Notes : Section(LR.string.player_tab_notes)
-        data object Summary : Section(LR.string.player_tab_summary)
-        data object Bookmarks : Section(LR.string.player_tab_bookmarks)
-        data object Chapters : Section(LR.string.player_tab_chapters)
-    }
+internal data class TranscriptTab(
+    val episodeUuid: String,
+    val podcastUuid: String?,
+    val isAvailable: Boolean,
+)
 
-    private var sections = listOf(Section.Player, Section.Bookmarks)
+internal fun transcriptTabForPlayerEpisode(
+    playerEpisodeUuid: String?,
+    playerPodcastUuid: String?,
+    shelfEpisodeUuid: String?,
+    shelfTranscriptAvailable: Boolean,
+): TranscriptTab? {
+    val episodeUuid = playerEpisodeUuid?.takeIf { it.isNotEmpty() } ?: return null
+    return TranscriptTab(
+        episodeUuid = episodeUuid,
+        podcastUuid = playerPodcastUuid,
+        isAvailable = shelfTranscriptAvailable && episodeUuid == shelfEpisodeUuid,
+    )
+}
+
+internal enum class PlayerSectionType {
+    Player,
+    Notes,
+    Summary,
+    Transcript,
+    Bookmarks,
+    Chapters,
+}
+
+internal data class PlayerSection(
+    val type: PlayerSectionType,
+    val episodeUuid: String? = null,
+    val podcastUuid: String? = null,
+)
+
+internal fun buildPlayerSections(
+    hasNotes: Boolean,
+    hasSummary: Boolean = false,
+    transcriptEpisodeUuid: String? = null,
+    transcriptPodcastUuid: String? = null,
+    hasChapters: Boolean = false,
+): List<PlayerSection> {
+    return buildList {
+        add(PlayerSection(PlayerSectionType.Player))
+        if (hasNotes) add(PlayerSection(PlayerSectionType.Notes))
+        if (hasSummary) add(PlayerSection(PlayerSectionType.Summary))
+        if (transcriptEpisodeUuid != null) {
+            add(PlayerSection(PlayerSectionType.Transcript, transcriptEpisodeUuid, transcriptPodcastUuid))
+        }
+        if (hasChapters) add(PlayerSection(PlayerSectionType.Chapters))
+        add(PlayerSection(PlayerSectionType.Bookmarks))
+    }
+}
+
+private class ViewPagerAdapter(fragmentManager: FragmentManager, lifecycle: Lifecycle) : FragmentStateAdapter(fragmentManager, lifecycle) {
+    private var sections = buildPlayerSections(hasNotes = false)
 
     val indexOfPlayer: Int
-        get() = sections.indexOf(Section.Player)
+        get() = sections.indexOfFirst { it.type == PlayerSectionType.Player }
 
     val indexOfChapters: Int
-        get() = sections.indexOf(Section.Chapters)
+        get() = sections.indexOfFirst { it.type == PlayerSectionType.Chapters }
 
     val indexOfBookmarks: Int
-        get() = sections.indexOf(Section.Bookmarks)
+        get() = sections.indexOfFirst { it.type == PlayerSectionType.Bookmarks }
 
     fun updateNotes(addNotes: Boolean) {
         updateSections(hasNotes = addNotes)
@@ -473,21 +580,40 @@ private class ViewPagerAdapter(fragmentManager: FragmentManager, lifecycle: Life
         updateSections(hasChapters = addChapters)
     }
 
+    fun updateTranscript(addTranscript: Boolean, episodeUuid: String?, podcastUuid: String?) {
+        updateSections(
+            hasTranscript = addTranscript && episodeUuid != null,
+            transcriptEpisodeUuid = episodeUuid,
+            transcriptPodcastUuid = podcastUuid,
+        )
+    }
+
+    fun sectionType(position: Int): PlayerSectionType? {
+        return sections.getOrNull(position)?.type
+    }
+
+    fun sectionTypes(): List<PlayerSectionType> {
+        return sections.map { it.type }
+    }
+
     // Stable IDs via getItemId/containsItem allow FragmentStateAdapter to efficiently diff fragments
     @SuppressLint("NotifyDataSetChanged")
     private fun updateSections(
-        hasNotes: Boolean = sections.contains(Section.Notes),
-        hasSummary: Boolean = sections.contains(Section.Summary),
-        hasChapters: Boolean = sections.contains(Section.Chapters),
+        hasNotes: Boolean = sections.any { it.type == PlayerSectionType.Notes },
+        hasSummary: Boolean = sections.any { it.type == PlayerSectionType.Summary },
+        hasTranscript: Boolean = sections.any { it.type == PlayerSectionType.Transcript },
+        transcriptEpisodeUuid: String? = sections.firstOrNull { it.type == PlayerSectionType.Transcript }?.episodeUuid,
+        transcriptPodcastUuid: String? = sections.firstOrNull { it.type == PlayerSectionType.Transcript }?.podcastUuid,
+        hasChapters: Boolean = sections.any { it.type == PlayerSectionType.Chapters },
     ) {
         val currentSections = sections
-        val newSections = buildList {
-            add(Section.Player)
-            if (hasNotes) add(Section.Notes)
-            if (hasSummary) add(Section.Summary)
-            if (hasChapters) add(Section.Chapters)
-            add(Section.Bookmarks)
-        }
+        val newSections = buildPlayerSections(
+            hasNotes = hasNotes,
+            hasSummary = hasSummary,
+            transcriptEpisodeUuid = transcriptEpisodeUuid.takeIf { hasTranscript },
+            transcriptPodcastUuid = transcriptPodcastUuid,
+            hasChapters = hasChapters,
+        )
         if (currentSections != newSections) {
             sections = newSections
             notifyDataSetChanged()
@@ -495,11 +621,11 @@ private class ViewPagerAdapter(fragmentManager: FragmentManager, lifecycle: Life
     }
 
     override fun getItemId(position: Int): Long {
-        return sections[position].hashCode().toLong()
+        return sections[position].stableId()
     }
 
     override fun containsItem(itemId: Long): Boolean {
-        return sections.map { it.hashCode().toLong() }.contains(itemId)
+        return sections.any { it.stableId() == itemId }
     }
 
     override fun getItemCount(): Int {
@@ -507,23 +633,71 @@ private class ViewPagerAdapter(fragmentManager: FragmentManager, lifecycle: Life
     }
 
     override fun createFragment(position: Int): Fragment {
-        return when (sections[position]) {
-            is Section.Player -> PlayerHeaderFragment()
-            is Section.Notes -> NotesFragment()
-            is Section.Summary -> SummaryFragment()
-            is Section.Bookmarks -> BookmarksFragment.newInstance(SourceView.PLAYER)
-            is Section.Chapters -> ChaptersFragment.forPlayer()
+        val section = sections[position]
+        return when (section.type) {
+            PlayerSectionType.Player -> PlayerHeaderFragment()
+
+            PlayerSectionType.Notes -> NotesFragment()
+
+            PlayerSectionType.Summary -> SummaryFragment()
+
+            PlayerSectionType.Transcript -> PlayerTranscriptFragment.newInstance(
+                episodeUuid = requireNotNull(section.episodeUuid),
+                podcastUuid = section.podcastUuid,
+            )
+
+            PlayerSectionType.Bookmarks -> BookmarksFragment.newInstance(SourceView.PLAYER)
+
+            PlayerSectionType.Chapters -> ChaptersFragment.forPlayer()
         }
     }
 
     @StringRes
     fun pageTitle(position: Int): Int {
-        return sections[position].titleRes
+        return when (sections[position].type) {
+            PlayerSectionType.Player -> LR.string.player_tab_playing
+            PlayerSectionType.Notes -> LR.string.player_tab_notes
+            PlayerSectionType.Summary -> LR.string.player_tab_summary
+            PlayerSectionType.Transcript -> LR.string.transcript
+            PlayerSectionType.Bookmarks -> LR.string.player_tab_bookmarks
+            PlayerSectionType.Chapters -> LR.string.player_tab_chapters
+        }
     }
 
-    fun isPlayerTab(position: Int) = sections[position] is Section.Player
-    fun isNotesTab(position: Int) = sections[position] is Section.Notes
-    fun isSummaryTab(position: Int) = sections[position] is Section.Summary
-    fun isBookmarksTab(position: Int) = sections[position] is Section.Bookmarks
-    fun isChaptersTab(position: Int) = sections[position] is Section.Chapters
+    fun isPlayerTab(position: Int) = sections[position].type == PlayerSectionType.Player
+    fun isNotesTab(position: Int) = sections[position].type == PlayerSectionType.Notes
+    fun isSummaryTab(position: Int) = sections[position].type == PlayerSectionType.Summary
+    fun isTranscriptTab(position: Int) = sections[position].type == PlayerSectionType.Transcript
+    fun isBookmarksTab(position: Int) = sections[position].type == PlayerSectionType.Bookmarks
+    fun isChaptersTab(position: Int) = sections[position].type == PlayerSectionType.Chapters
+
+    private fun PlayerSection.stableId(): Long {
+        return playerSectionStableId(this)
+    }
+}
+
+internal fun remapSectionPosition(
+    selectedSection: PlayerSectionType?,
+    sections: List<PlayerSectionType>,
+    currentPosition: Int,
+): Int {
+    return sections.indexOf(selectedSection).takeIf { it >= 0 }
+        ?: currentPosition.coerceIn(0, sections.lastIndex)
+}
+
+internal fun playerSectionStableId(section: PlayerSection): Long {
+    return when (section.type) {
+        PlayerSectionType.Player -> 1L
+        PlayerSectionType.Notes -> 2L
+        PlayerSectionType.Summary -> 3L
+        PlayerSectionType.Transcript -> 4L xor stableStringId(requireNotNull(section.episodeUuid))
+        PlayerSectionType.Bookmarks -> 5L
+        PlayerSectionType.Chapters -> 6L
+    }
+}
+
+private fun stableStringId(value: String): Long {
+    return value.fold(1125899906842597L) { hash, character ->
+        hash * 31 + character.code
+    }
 }

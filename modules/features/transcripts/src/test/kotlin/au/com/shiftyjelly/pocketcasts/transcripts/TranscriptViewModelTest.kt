@@ -541,6 +541,22 @@ class TranscriptViewModelTest {
     }
 
     @Test
+    fun `direct custom transcript seeks without fingerprint timing`() = runTest {
+        transcriptManager.avaiableTranscript = Transcript.TextPreview.copy(isDirectlySeekable = true)
+        playbackStateFlow.value = PlaybackState(episodeUuid = "episode-uuid", positionMs = 10_000)
+        whenever(playbackManager.getCurrentEpisode()).thenReturn(PodcastEpisode(uuid = "episode-uuid", publishedDate = Date()))
+
+        awaitUiState { it.isTapToSeekAvailable && it.syncedState == FingerprintTimingManager.State.Idle }
+        drainEvents()
+
+        val seekTarget = viewModel.seekToTranscriptEntry(TranscriptEntry.Text("Line", startTimeMs = 30_000))
+
+        assertEquals(TranscriptViewModel.TapSeekResult.Seeked(30_000), seekTarget)
+        verify(playbackManager).seekToTimeMs(eq(30_000), anyOrNull())
+        verify(fingerprintTimingManager, never()).prepareForCurrentEpisode(any())
+    }
+
+    @Test
     fun `do not track seek events when transcript episode is not playing`() = runTest {
         setUpTapToSeek()
         playbackStateFlow.value = PlaybackState(episodeUuid = "other-uuid", positionMs = 10_000)

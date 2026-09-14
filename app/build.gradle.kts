@@ -46,6 +46,10 @@ android {
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_prototype"
         }
 
+        maybeCreate("personal").apply {
+            manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_radioactive"
+        }
+
         named("release") {
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
 

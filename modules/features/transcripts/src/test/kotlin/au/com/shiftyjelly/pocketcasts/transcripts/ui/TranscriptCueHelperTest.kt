@@ -301,6 +301,44 @@ class TranscriptCueHelperTest {
     }
 
     @Test
+    fun `resolveHighlightAtPlaybackTime uses VTT time without a reference mapping`() {
+        val entries = listOf(
+            text(0, 1000),
+            text(1001, 2000),
+        )
+
+        assertEquals(
+            HighlightOutcome.Show(entryIndex = 1, wordIndex = null),
+            TranscriptCueHelper.resolveHighlightAtPlaybackTime(
+                entries = entries,
+                playbackTimeMs = 1500,
+                isDirectlySeekable = true,
+                referenceTime = null,
+                cachedIndex = 0,
+            ),
+        )
+    }
+
+    @Test
+    fun `resolveHighlightAtPlaybackTime uses mapped reference time when VTT is not direct`() {
+        val entries = listOf(
+            text(0, 1000),
+            text(1001, 2000),
+        )
+
+        assertEquals(
+            HighlightOutcome.Show(entryIndex = 0, wordIndex = null),
+            TranscriptCueHelper.resolveHighlightAtPlaybackTime(
+                entries = entries,
+                playbackTimeMs = 1500,
+                isDirectlySeekable = false,
+                referenceTime = 0.5,
+                cachedIndex = 0,
+            ),
+        )
+    }
+
+    @Test
     fun `resolveHighlight includes the word index when the cue has word timings`() {
         val entries = listOf(
             TranscriptEntry.Text(

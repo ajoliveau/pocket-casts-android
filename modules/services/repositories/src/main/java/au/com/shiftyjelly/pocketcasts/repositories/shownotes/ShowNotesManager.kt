@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import okhttp3.CacheControl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 class ShowNotesManager @Inject constructor(
     @ApplicationScope private val scope: CoroutineScope,
@@ -21,7 +22,10 @@ class ShowNotesManager @Inject constructor(
     private val transcriptsService: TranscriptService,
     showNotesProcessorFactory: ShowNotesProcessor.Factory,
 ) {
-    private val showNotesProcessor = showNotesProcessorFactory.create(BuildConfig.SERVER_SHOW_NOTES_URLS.toHttpUrl())
+    private val showNotesProcessor = showNotesProcessorFactory.create(
+        showNotesBaseUrl = BuildConfig.SERVER_SHOW_NOTES_URLS.toHttpUrl(),
+        customTranscriptBaseUrl = BuildConfig.CUSTOM_TRANSCRIPT_BASE_URL.toHttpUrlOrNull(),
+    )
 
     fun loadShowNotesFlow(podcastUuid: String, episodeUuid: String): Flow<ShowNotesState> = showNotesServiceManager.loadShowNotesFlow(
         podcastUuid = podcastUuid,

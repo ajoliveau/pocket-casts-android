@@ -127,7 +127,11 @@ class ShelfSharedViewModel @Inject constructor(
             episode is PodcastEpisode &&
             (streamHasVideo || videoState.hlsAvailable)
         return uiState.value.copy(
-            shelfItems = shelfItems.filter { it.showIf(episode) && (it != ShelfItem.StreamSelector || canToggleVideo) },
+            shelfItems = shelfItems.filter {
+                it.showIf(episode) &&
+                    (it != ShelfItem.Transcript || isTranscriptAvailable) &&
+                    (it != ShelfItem.StreamSelector || canToggleVideo)
+            },
             episode = episode,
             isTranscriptAvailable = isTranscriptAvailable,
             isVideoRenderingEnabled = videoState.renderingEnabled && streamHasVideo,

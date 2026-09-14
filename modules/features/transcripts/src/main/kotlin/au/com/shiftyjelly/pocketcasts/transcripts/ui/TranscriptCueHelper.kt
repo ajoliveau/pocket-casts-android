@@ -2,6 +2,7 @@ package au.com.shiftyjelly.pocketcasts.transcripts.ui
 
 import au.com.shiftyjelly.pocketcasts.models.to.TranscriptEntry
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 internal sealed interface HighlightOutcome {
     data class Show(val entryIndex: Int, val wordIndex: Int?) : HighlightOutcome
@@ -12,6 +13,24 @@ internal sealed interface HighlightOutcome {
 }
 
 internal object TranscriptCueHelper {
+
+    /**
+     * Resolves a playback position against either direct cue timing or a fingerprint reference time.
+     */
+    fun resolveHighlightAtPlaybackTime(
+        entries: List<TranscriptEntry>,
+        playbackTimeMs: Int,
+        isDirectlySeekable: Boolean,
+        referenceTime: Double?,
+        cachedIndex: Int,
+    ): HighlightOutcome {
+        val timelineTimeMs = if (isDirectlySeekable) {
+            playbackTimeMs.toLong()
+        } else {
+            referenceTime?.times(1000)?.roundToLong() ?: return HighlightOutcome.Clear
+        }
+        return resolveHighlight(entries, timelineTimeMs, cachedIndex)
+    }
 
     /**
      * Resolves what the highlight should do for a given reference time. Pure so it can be

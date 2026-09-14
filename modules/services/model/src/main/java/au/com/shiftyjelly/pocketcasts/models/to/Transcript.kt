@@ -4,6 +4,8 @@ sealed interface Transcript {
     val type: TranscriptType
     val url: String
     val isGenerated: Boolean
+    val isDirectlySeekable: Boolean
+        get() = false
     val episodeUuid: String
     val podcastUuid: String?
 
@@ -14,6 +16,7 @@ sealed interface Transcript {
         override val isGenerated: Boolean,
         override val episodeUuid: String,
         override val podcastUuid: String?,
+        override val isDirectlySeekable: Boolean = false,
     ) : Transcript {
         fun buildString(): String {
             return entries.joinToString(separator = "\n") { entry ->

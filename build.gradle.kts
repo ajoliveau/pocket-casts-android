@@ -255,6 +255,11 @@ subprojects {
 
     plugins.withType<BasePlugin>().configureEach {
         configure<CommonExtension> {
+            val customTranscriptBaseUrl = project.findProperty("customTranscriptBaseUrl")?.toString().orEmpty()
+            val escapedCustomTranscriptBaseUrl = customTranscriptBaseUrl
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+
             compileSdk = project.property("compileSdkVersion") as Int
 
             with(compileOptions) {
@@ -267,6 +272,7 @@ subprojects {
                 minSdk = project.property("minSdkVersion") as Int
 
                 buildConfigField("boolean", "IS_PROTOTYPE", "false")
+                buildConfigField("boolean", "IS_PERSONAL", "false")
 
                 buildConfigField("int", "VERSION_CODE", "${project.property("versionCode")}")
                 buildConfigField("String", "VERSION_NAME", "\"${project.property("versionName")}\"")
@@ -293,6 +299,8 @@ subprojects {
                 buildConfigField("String", "SERVER_LIST_URL", "\"https://lists.pocketcasts.com\"")
                 buildConfigField("String", "SERVER_LIST_HOST", "\"lists.pocketcasts.com\"")
                 buildConfigField("String", "SERVER_SHOW_NOTES_URLS", "\"https://shownotes.pocketcasts.com\"")
+                buildConfigField("String", "CUSTOM_TRANSCRIPT_BASE_URL", "\"\"")
+                buildConfigField("String", "ACCOUNT_TYPE_SUFFIX", "\"\"")
                 buildConfigField("String", "WEB_FEEDS_API_URL", "\"https://web-feeds-api.pocketcasts.com\"")
 
                 testInstrumentationRunner = project.property("testInstrumentationRunner") as String
@@ -350,6 +358,7 @@ subprojects {
                     buildConfigField("String", "SERVER_LIST_URL", "\"https://lists.pocketcasts.net\"")
                     buildConfigField("String", "SERVER_LIST_HOST", "\"lists.pocketcasts.net\"")
                     buildConfigField("String", "SERVER_SHOW_NOTES_URLS", "\"https://shownotes.pocketcasts.net\"")
+                    buildConfigField("String", "ACCOUNT_TYPE_SUFFIX", "\".debug\"")
                     buildConfigField("String", "WEB_FEEDS_API_URL", "\"https://web-feeds-api.pocketcasts.net\"")
                 }
 
@@ -360,10 +369,18 @@ subprojects {
                     ext.set("alwaysUpdateBuildId", false)
 
                     buildConfigField("boolean", "DEBUG", "true")
+                    buildConfigField("String", "ACCOUNT_TYPE_SUFFIX", "\".debug\"")
                 }
 
                 maybeCreate("prototype").apply {
                     buildConfigField("boolean", "IS_PROTOTYPE", "true")
+                }
+
+                maybeCreate("personal").apply {
+                    initWith(getByName("debugProd"))
+                    buildConfigField("String", "CUSTOM_TRANSCRIPT_BASE_URL", "\"$escapedCustomTranscriptBaseUrl\"")
+                    buildConfigField("String", "ACCOUNT_TYPE_SUFFIX", "\".personal\"")
+                    buildConfigField("boolean", "IS_PERSONAL", "true")
                 }
             }
         }
@@ -424,6 +441,12 @@ subprojects {
                     if (canSignRelease) {
                         signingConfig = signingConfigs.getByName("release")
                     }
+                }
+
+                maybeCreate("personal").apply {
+                    applicationIdSuffix = ".personal"
+                    isDebuggable = true
+                    signingConfig = signingConfigs.getByName("debug")
                 }
 
                 named("release") {

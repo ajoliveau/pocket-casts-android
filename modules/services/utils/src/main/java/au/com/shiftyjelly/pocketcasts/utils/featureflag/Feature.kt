@@ -3,7 +3,7 @@ package au.com.shiftyjelly.pocketcasts.utils.featureflag
 import au.com.shiftyjelly.pocketcasts.helper.BuildConfig
 import java.time.LocalDate
 
-private val isDebugOrPrototypeBuild = BuildConfig.DEBUG || BuildConfig.IS_PROTOTYPE
+private val isDebugOrPrototypeBuild = (BuildConfig.DEBUG || BuildConfig.IS_PROTOTYPE) && !BuildConfig.IS_PERSONAL
 
 enum class Feature(
     val key: String,

@@ -20,6 +20,7 @@ import java.util.Date
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.mockito.kotlin.doReturn
@@ -46,6 +47,7 @@ class ShowNotesProcessTest {
         transcriptDao = transcriptDao,
         service = service,
         showNotesBaseUrl = "https://test.com".toHttpUrl(),
+        customTranscriptBaseUrl = null,
     )
 
     @Test
@@ -530,6 +532,64 @@ class ShowNotesProcessTest {
             ),
         )
         verify(transcriptDao).replaceAll(expected1)
+    }
+
+    @Test
+    fun `add custom transcript for any episode`() = runTest(coroutineRule.testDispatcher) {
+        val showNotes = ShowNotesResponse(
+            podcast = ShowNotesPodcast(
+                uuid = "podcast-id",
+                episodes = listOf(
+                    ShowNotesEpisode(uuid = "episode-id"),
+                ),
+            ),
+        )
+
+        val transcripts = showNotes.findTranscripts(
+            podcastUuid = "podcast-id",
+            episodeUuid = "episode-id",
+            hasGeneratedTranscript = true,
+            showNotesBaseUrl = "https://test.com".toHttpUrl(),
+            customTranscriptBaseUrl = "http://192.168.2.73:9870".toHttpUrl(),
+        )
+
+        assertEquals(
+            listOf(
+                Transcript(
+                    episodeUuid = "episode-id",
+                    url = "http://192.168.2.73:9870/generated_transcripts/podcast-id/episode-id.vtt",
+                    type = "text/vtt",
+                    isGenerated = false,
+                ),
+                Transcript(
+                    episodeUuid = "episode-id",
+                    url = "https://test.com/generated_transcripts/podcast-id/episode-id.vtt",
+                    type = "text/vtt",
+                    isGenerated = true,
+                ),
+            ),
+            transcripts,
+        )
+    }
+
+    @Test
+    fun `do not add custom transcript without a custom base url`() {
+        val showNotes = ShowNotesResponse(
+            podcast = ShowNotesPodcast(
+                uuid = "podcast-id",
+                episodes = listOf(ShowNotesEpisode(uuid = "episode-id")),
+            ),
+        )
+
+        assertEquals(
+            emptyList<Transcript>(),
+            showNotes.findTranscripts(
+                podcastUuid = "podcast-id",
+                episodeUuid = "episode-id",
+                hasGeneratedTranscript = false,
+                showNotesBaseUrl = "https://test.com".toHttpUrl(),
+            ),
+        )
     }
 
     @Test

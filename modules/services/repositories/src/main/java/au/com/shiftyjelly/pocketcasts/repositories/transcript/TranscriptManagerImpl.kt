@@ -6,8 +6,10 @@ import au.com.shiftyjelly.pocketcasts.models.to.ChapterOrigin
 import au.com.shiftyjelly.pocketcasts.models.to.DbChapter
 import au.com.shiftyjelly.pocketcasts.models.to.Transcript
 import au.com.shiftyjelly.pocketcasts.models.to.TranscriptType
+import au.com.shiftyjelly.pocketcasts.repositories.BuildConfig
 import au.com.shiftyjelly.pocketcasts.repositories.podcast.ChapterManager
 import au.com.shiftyjelly.pocketcasts.repositories.podcast.EpisodeManager
+import au.com.shiftyjelly.pocketcasts.repositories.shownotes.CustomTranscriptCatalog
 import au.com.shiftyjelly.pocketcasts.servers.podcast.TranscriptService
 import au.com.shiftyjelly.pocketcasts.utils.featureflag.Feature
 import au.com.shiftyjelly.pocketcasts.utils.featureflag.FeatureFlag
@@ -23,11 +25,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.CacheControl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import timber.log.Timber
 import au.com.shiftyjelly.pocketcasts.models.entity.Transcript as DbTranscript
 
@@ -43,8 +47,12 @@ class TranscriptManagerImpl @Inject constructor(
     private val transcriptUrlBlacklist = ConcurrentHashMap<String, String>()
     private val lruCache = LruCache<String, Transcript>(maxSize = 20)
     private val metaAdapter = moshi.adapter(EpisodeMetaResponse::class.java)
+    private val customTranscriptBaseUrl = BuildConfig.CUSTOM_TRANSCRIPT_BASE_URL.toHttpUrlOrNull()
 
     override fun observeIsTranscriptAvailable(episodeUuid: String): Flow<Boolean> {
+        if (customTranscriptBaseUrl != null) {
+            return flow { emit(loadTranscript(episodeUuid) != null) }
+        }
         return transcriptDao.observeTranscripts(episodeUuid).map { it.isNotEmpty() }
     }
 
@@ -64,7 +72,13 @@ class TranscriptManagerImpl @Inject constructor(
     }
 
     private suspend fun findAndCacheTranscript(episodeUuid: String): Transcript? {
-        val transcript = loadLocalTranscripts(episodeUuid)
+        val availableTranscripts = loadLocalTranscripts(episodeUuid)
+        val transcripts = if (customTranscriptBaseUrl != null) {
+            availableTranscripts.filter { CustomTranscriptCatalog.isCustomUrl(it.url, customTranscriptBaseUrl) }
+        } else {
+            availableTranscripts
+        }
+        val transcript = transcripts
             .asFlow()
             .mapNotNull(::associateWithParser)
             .mapNotNull(::readTranscript)
@@ -87,7 +101,13 @@ class TranscriptManagerImpl @Inject constructor(
         }
         return availableTranscripts
             ?.filter { it.url !in transcriptUrlBlacklist[episodeUuid].orEmpty() }
-            ?.sortedWith(TranscriptsComparator)
+            ?.sortedWith(
+                compareBy<DbTranscript>(
+                    { !CustomTranscriptCatalog.isCustomUrl(it.url, customTranscriptBaseUrl) },
+                    { it.isGenerated },
+                    { TranscriptType.fromMimeType(it.type).priority },
+                ),
+            )
             .orEmpty()
     }
 
@@ -117,6 +137,10 @@ class TranscriptManagerImpl @Inject constructor(
                     isGenerated = transcript.isGenerated,
                     episodeUuid = transcript.episodeUuid,
                     podcastUuid = podcastUuid,
+                    isDirectlySeekable = CustomTranscriptCatalog.isCustomUrl(
+                        url = transcript.url,
+                        baseUrl = customTranscriptBaseUrl,
+                    ),
                 )
             }
             .recoverCatching { error ->
@@ -204,11 +228,6 @@ class TranscriptManagerImpl @Inject constructor(
         transcriptUrlBlacklist.remove(episodeUuid)
     }
 }
-
-private val TranscriptsComparator = compareBy<DbTranscript>(
-    { it.isGenerated },
-    { TranscriptType.fromMimeType(it.type).priority },
-)
 
 private val TranscriptType?.priority
     get() = when (this) {

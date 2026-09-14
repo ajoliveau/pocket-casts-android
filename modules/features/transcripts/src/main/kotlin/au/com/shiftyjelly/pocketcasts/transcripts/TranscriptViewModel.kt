@@ -149,8 +149,9 @@ class TranscriptViewModel @AssistedInject constructor(
             }
 
             if (transcriptState is TranscriptState.Loaded && transcriptState.transcript is Transcript.Text) {
+                val transcript = transcriptState.transcript
                 val currentPlayingUuid = playbackManager.getCurrentEpisode()?.uuid
-                if (currentPlayingUuid == episodeUuid) {
+                if (currentPlayingUuid == episodeUuid && !transcript.isDirectlySeekable) {
                     fingerprintTimingManager.prepareForCurrentEpisode(FingerprintTimingManager.PrepareTrigger.TRANSCRIPT_VIEW)
                     _uiState.update { state -> state.copy(syncedState = fingerprintTimingManager.state) }
                     observeSyncedState()
@@ -201,6 +202,12 @@ class TranscriptViewModel @AssistedInject constructor(
         val currentState = _uiState.value
         if (!currentState.isTapToSeekAvailable) return TapSeekResult.Unavailable
 
+        if (currentState.isDirectlySeekableTranscript) {
+            val seekTimeMs = textEntry.startTimeMs.toInt()
+            performTapSeek(seekTimeMs)
+            return TapSeekResult.Seeked(seekTimeMs)
+        }
+
         val episodeUuid = currentState.transcriptEpisodeUuid ?: return TapSeekResult.Unavailable
         val densePlayback = if (currentState.isSyncedActive) {
             fingerprintTimingManager.densePlaybackTime(episodeUuid, textEntry.startTimeMs.milliseconds)
@@ -223,8 +230,17 @@ class TranscriptViewModel @AssistedInject constructor(
      */
     suspend fun resolveAndSeekToEntry(entry: TranscriptEntry): Int? {
         val textEntry = entry as? TranscriptEntry.Text ?: return null
+        if (textEntry.startTimeMs < 0) return null
         val currentState = _uiState.value
+        if (!currentState.isTapToSeekAvailable) return null
         val episodeUuid = currentState.transcriptEpisodeUuid ?: return null
+
+        if (currentState.isDirectlySeekableTranscript) {
+            if (playbackManager.getCurrentEpisode()?.uuid != episodeUuid) return null
+            val seekTimeMs = textEntry.startTimeMs.toInt()
+            performTapSeek(seekTimeMs)
+            return seekTimeMs
+        }
 
         val myJob = currentCoroutineContext().job
         activeTapResolve?.takeIf { it !== myJob }?.cancel()
@@ -533,7 +549,9 @@ data class UiState(
 
     val isGeneratedTextTranscript get() = ((transcriptState as? TranscriptState.Loaded)?.transcript as? Transcript.Text)?.isGenerated == true
 
-    val isTapToSeekAvailable get() = isGeneratedTextTranscript &&
+    val isDirectlySeekableTranscript get() = ((transcriptState as? TranscriptState.Loaded)?.transcript as? Transcript.Text)?.isDirectlySeekable == true
+
+    val isTapToSeekAvailable get() = (isGeneratedTextTranscript || isDirectlySeekableTranscript) &&
         !isPaywallVisible &&
         transcriptEpisodeUuid != null &&
         transcriptEpisodeUuid == playingEpisodeUuid

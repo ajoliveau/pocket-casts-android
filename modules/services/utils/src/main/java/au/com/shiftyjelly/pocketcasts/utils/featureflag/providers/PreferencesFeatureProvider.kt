@@ -1,6 +1,7 @@
 package au.com.shiftyjelly.pocketcasts.utils.featureflag.providers
 
 import android.content.Context
+import au.com.shiftyjelly.pocketcasts.helper.BuildConfig
 import au.com.shiftyjelly.pocketcasts.utils.featureflag.Feature
 import au.com.shiftyjelly.pocketcasts.utils.featureflag.MIN_PRIORITY
 import au.com.shiftyjelly.pocketcasts.utils.featureflag.ModifiableFeatureProvider
@@ -18,6 +19,10 @@ class PreferencesFeatureProvider @Inject constructor(
 ) : ModifiableFeatureProvider {
     private val preferences = context.featureFlagsSharedPrefs()
 
+    init {
+        resetPersonalFeatureOverrides()
+    }
+
     override val priority = MIN_PRIORITY
 
     override fun hasFeature(feature: Feature): Boolean = true
@@ -28,5 +33,18 @@ class PreferencesFeatureProvider @Inject constructor(
 
     override suspend fun awaitInitialization() = true
 
+    private fun resetPersonalFeatureOverrides() {
+        if (!BuildConfig.IS_PERSONAL || preferences.getInt(PERSONAL_DEFAULTS_VERSION_KEY, 0) >= PERSONAL_DEFAULTS_VERSION) return
+        preferences.edit()
+            .clear()
+            .putInt(PERSONAL_DEFAULTS_VERSION_KEY, PERSONAL_DEFAULTS_VERSION)
+            .apply()
+    }
+
     private fun Context.featureFlagsSharedPrefs() = this.getSharedPreferences("POCKETCASTS_FEATURE_FLAGS", Context.MODE_PRIVATE)
+
+    private companion object {
+        const val PERSONAL_DEFAULTS_VERSION = 1
+        const val PERSONAL_DEFAULTS_VERSION_KEY = "personalDefaultsVersion"
+    }
 }
